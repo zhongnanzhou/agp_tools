@@ -5,7 +5,7 @@
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QTextEdit
 from PySide6.QtCore import QTimer
 
-from utils import loggings
+from agp.utils import loggings
 
 qt_handler = loggings.log_handlers.qt_handler()
 

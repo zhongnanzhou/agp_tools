@@ -1,6 +1,6 @@
 # AGP - Automated Graphic Processing Tools
 
-> **当前版本：v0.0.1** | PySide6 桌面图形处理工具
+> **当前版本：v0.0.2** | PySide6 桌面图形处理工具
 
 一个集成化的图片处理工具，基于 PySide6 构建，支持角度检测、角度校正、图片切分、图片压缩等功能。提供三栏式工作台界面，包含目录缩略图预览、图片编辑预览、功能面板和控制台输出。
 
@@ -43,7 +43,7 @@
 #### 核心处理模块
 - [x] **角度检测**（`core/angle_detector.py`）：Hough 直线检测、等轴测角点检测（6点）、角度计算
 - [x] **角度校正**（`core/isometric_corrector.py`）：仿射变换校正、透视变换校正、Hough 角度验证
-- [x] **图片切分**（`core/image_cropper.py`）：支持 4/6/8/9 份均分，保留透明通道
+- [x] **图片切分/合并**（`core/image_cropper.py`）：支持 4/6/8/9 份均分、目录自动识别合并、grid/index 两种输出命名策略
 - [x] **图片压缩**（`core/image_compressor.py`）：PNG 无损压缩，可调压缩级别
 
 #### 工具支撑
@@ -55,42 +55,51 @@
 ### ⚠️ 已知限制（v0.0.1）
 
 - 各功能面板（角度检测/校正/切分/压缩）代码已存在，但当前主窗口通过 FunctionPanelWidget 硬编码调用，未接入详细面板
+- 图片合并能力已在 core 提供，主窗口尚未接入独立“合并”交互入口
 - 无批量处理功能
 - 无校正前后对比预览
 
-> 📋 后续规划详见 [`plan/PLANNING_V1.md`](plan/PLANNING_V1.md)
+> 📋 后续规划详见 [`docs/FUTURE.md`](docs/FUTURE.md)
+
+### ✅ 当前验证基线
+
+- `python -c "import agp.main"`：通过
+- `python -m pytest -q`：10 passed（2026-03-15）
 
 ---
 
 ## 目录结构
 
 ```
-tools/agp/
+agp/
 ├── main.py                    # 程序入口
-├── __init__.py
+├── __init__.py                # 版本号
 ├── requirements.txt           # Python 依赖
 ├── qt.conf                    # Qt 配置
 ├── core/                      # 核心处理模块
 │   ├── __init__.py
 │   ├── angle_detector.py      # 角度检测（Hough + 等轴测角点）
-│   ├── isometric_corrector.py # 等轴测角度校正（仿射/透视变换）
+│   ├── isometric_corrector.py # 角度校正（仿射/透视变换）
 │   ├── image_cropper.py       # 图片切分（4/6/8/9 份）
 │   └── image_compressor.py    # 图片压缩（PNG 无损）
 ├── ui/                        # UI 界面模块
 │   ├── __init__.py
+│   ├── event_bus.py           # 全局事件总线（组件通信枢纽）
 │   ├── config.py              # UI 常量配置（尺寸、间距等）
-│   ├── main_window.py         # 主窗口（三栏布局 + 功能调度）
-│   ├── angle_detect.py        # 角度检测面板
-│   ├── angle_correct.py       # 角度校正面板
-│   ├── image_crop.py          # 图片切分面板
-│   ├── image_compress.py      # 图片压缩面板
+│   ├── main_window.py         # 主窗口（三栏布局 + EventBus 调度）
+│   ├── angle_detect.py        # 角度检测面板（旧版，未接入）
+│   ├── angle_correct.py       # 角度校正面板（旧版，未接入）
+│   ├── image_crop.py          # 图片切分面板（旧版，未接入）
+│   ├── image_compress.py      # 图片压缩面板（旧版，未接入）
 │   └── widgets/               # 可复用 UI 组件
 │       ├── __init__.py
 │       ├── directory_preview.py  # 目录缩略图预览（懒加载）
 │       ├── image_preview.py      # 图片预览（支持编辑标注）
 │       ├── function_panel.py     # 功能按钮面板
 │       ├── result_display.py     # 结果展示
-│       └── console_widget.py     # 控制台输出
+│       ├── console_widget.py     # 控制台输出
+│       ├── thumbnail_item.py     # 缩略图项（延迟加载）
+│       └── thumbnail_loader.py   # 缩略图加载调度
 └── utils/                     # 工具支撑模块
     ├── __init__.py
     ├── loggings.py            # 日志系统（多 handler）
@@ -143,16 +152,19 @@ tools/agp/
 ### 安装依赖
 
 ```bash
-cd tools/agp
+cd e:\agp_tools
 pip install -r requirements.txt
 ```
 
 ### 运行程序
 
 ```bash
-# 从 tools 目录运行
-cd tools
+# 推荐：从项目根目录运行
 python -m agp.main
+
+# 也支持在 agp 目录直接运行
+cd agp
+python main.py
 ```
 
 ### 操作流程
@@ -167,6 +179,20 @@ python -m agp.main
 ---
 
 ## 更新日志
+
+### v0.0.2（2026-03-15）— 组件通信解耦重构
+
+#### 🏗️ 架构重构
+- 引入 EventBus 事件总线（`ui/event_bus.py`），统一组件间通信机制
+- 所有 Widget 移除冗余 `main_window` 参数引用，实现真正解耦
+- 功能分发从 if-elif 重构为 `FUNCTION_MAP` 字典映射，新增功能只需一行配置
+- 缩略图系统拆分为独立模块（`thumbnail_item.py` + `thumbnail_loader.py`）
+
+#### 🔧 集成专项
+- 统一包导入路径为 `agp.*`，移除所有 `sys.path.insert` 硬编码
+- `image_crop/` 原型可复用能力收敛到 `agp/core`
+- 建立最小测试门禁（导入测试 + 四功能 smoke test）
+- 清理实验脚本，隔离与主项目 `pytest` 基线
 
 ### v0.0.1（2026-03-13）— 初始版本
 

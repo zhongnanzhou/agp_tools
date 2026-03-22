@@ -3,19 +3,17 @@
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QGridLayout, QPushButton, QSizePolicy
-from PySide6.QtCore import Signal, Qt
+from PySide6.QtCore import Qt
 
 from ..config import FUNCTION_PANEL_WIDTH, BUTTON_SIZE
+from ..event_bus import event_bus
 
 
 class FunctionPanelWidget(QWidget):
     """功能面板组件 - 右侧栏"""
 
-    function_triggered = Signal(str)
-
-    def __init__(self, main_window=None):
+    def __init__(self):
         super().__init__()
-        self.main_window = main_window
         self.init_ui()
 
     def init_ui(self):
@@ -57,5 +55,5 @@ class FunctionPanelWidget(QWidget):
         layout.addWidget(spacer)
 
     def on_button_clicked(self, func_id: str):
-        """按钮点击事件"""
-        self.function_triggered.emit(func_id)
+        """按钮点击事件，通过 EventBus 广播功能触发"""
+        event_bus.function_triggered.emit(func_id)

@@ -7,27 +7,42 @@ import numpy as np
 import math
 from pathlib import Path
 from PIL import Image
+from typing import Union
 
 
 class AngleDetector:
     """图片角度检测器"""
     
-    def __init__(self, image_path: str):
+    def __init__(self, image_input: Union[str, Path, Image.Image]):
         """
         初始化检测器
         
         Args:
-            image_path: 图片路径
+            image_input: 图片路径或 PIL Image 对象
         """
-        self.image_path = Path(image_path)
-        
-        if not self.image_path.exists():
-            raise FileNotFoundError(f"文件不存在：{image_path}")
-        
-        self.img_pil = Image.open(image_path)
+        self.image_path = None
+        if isinstance(image_input, Image.Image):
+            self.img_pil = image_input.copy()
+        else:
+            self.image_path = Path(image_input)
+            if not self.image_path.exists():
+                raise FileNotFoundError(f"文件不存在：{image_input}")
+            self.img_pil = Image.open(self.image_path)
         self.has_alpha = self.img_pil.mode in ['RGBA', 'LA', 'PA']
         self.img_np = np.array(self.img_pil)
         self.height, self.width = self.img_np.shape[:2]
+
+    def detect_angle(self) -> float:
+        hough_result = self.detect_hough_angle()
+        hough_angle = hough_result.get('avg_angle', 0)
+        if hough_angle and hough_angle > 0:
+            return float(hough_angle)
+        points = self.detect_isometric_corners()
+        if points:
+            angle_info = self.calculate_isometric_angle(points)
+            if angle_info and angle_info.get('avg_angle'):
+                return float(angle_info['avg_angle'])
+        return 0.0
     
     def detect_hough_angle(self):
         """

@@ -7,24 +7,27 @@ import numpy as np
 import math
 from pathlib import Path
 from PIL import Image
+from typing import Union
 
 
 class IsometricCorrector:
     """等轴测角度校正器"""
     
-    def __init__(self, image_path: str):
+    def __init__(self, image_input: Union[str, Path, Image.Image]):
         """
         初始化校正器
         
         Args:
-            image_path: 图片路径
+            image_input: 图片路径或 PIL Image 对象
         """
-        self.image_path = Path(image_path)
-        
-        if not self.image_path.exists():
-            raise FileNotFoundError(f"文件不存在：{image_path}")
-        
-        self.img_pil = Image.open(image_path)
+        self.image_path = None
+        if isinstance(image_input, Image.Image):
+            self.img_pil = image_input.copy()
+        else:
+            self.image_path = Path(image_input)
+            if not self.image_path.exists():
+                raise FileNotFoundError(f"文件不存在：{image_input}")
+            self.img_pil = Image.open(self.image_path)
         self.has_alpha = self.img_pil.mode in ['RGBA', 'LA', 'PA']
         self.img_np = np.array(self.img_pil)
         self.height, self.width = self.img_np.shape[:2]
@@ -382,3 +385,8 @@ class IsometricCorrector:
             image.save(str(output_path), 'JPEG', quality=95)
         else:
             image.save(str(output_path))
+
+    def correct(self, target_angle: float = 30.0, method: str = 'affine'):
+        if method == 'perspective':
+            return self.correct_with_perspective_transform(target_angle)
+        return self.correct_with_affine_transform(target_angle)

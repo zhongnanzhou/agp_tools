@@ -1,80 +1,23 @@
 """目录预览组件 - 左侧栏。"""
 
-from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QListWidgetItem, QSizePolicy, QScrollArea
-from PySide6.QtCore import Qt, QSize, Signal, QTimer
-from PySide6.QtGui import QPixmap, QIcon, QImageReader
+from PySide6.QtWidgets import QWidget, QVBoxLayout, QLabel, QListWidget, QSizePolicy
+from PySide6.QtCore import Qt, QSize, QTimer
 from pathlib import Path
 
 from ..config import DIR_PREVIEW_WIDTH, THUMBNAIL_SIZE
+from ..event_bus import event_bus
+from .thumbnail_item import ThumbnailItem
+from .thumbnail_loader import scan_image_files, load_visible_thumbnails
 
 import logging
 logger = logging.getLogger(__name__)
-
-class ThumbnailItem(QListWidgetItem):
-    """缩略图项 - 延迟加载"""
-
-    def __init__(self, file_path: str):
-        super().__init__(str(Path(file_path).name))
-        self.file_path = file_path
-        self.is_loaded = False
-        self.size = QSize(0, 0)  # 存储实际缩放后的缩略图尺寸
-        self.setToolTip(file_path)
-        # 文字换行（避免长文件名撑宽项）
-        self.setTextAlignment(Qt.AlignBottom | Qt.AlignHCenter)
-        self.setFlags(self.flags() & ~Qt.ItemIsEditable)
-        # 未加载缩略图时使用统一占位尺寸，保证初始布局稳定
-        self.setSizeHint(QSize(THUMBNAIL_SIZE, THUMBNAIL_SIZE + 20))
-
-    def load_thumbnail(self):
-        """加载缩略图（使用 QImageReader 直接解码到目标尺寸，避免全量加载原图）"""
-        # 1. 如果已经加载过，直接返回（避免重复加载）
-        if self.is_loaded:
-            return False
-
-        # 2. 使用 QImageReader 读取元信息，不加载全部像素
-        reader = QImageReader(self.file_path)
-        reader.setAutoTransform(True)  # 尊重 EXIF 旋转信息
-        original_size = reader.size()
-
-        if not original_size.isValid():
-            logger.warning(f"⚠️  无法加载图片：{self.file_path}")
-            return False
-
-        # 3. 计算目标缩放尺寸（保持宽高比），让解码器直接输出小图
-        scaled_size = original_size.scaled(
-            THUMBNAIL_SIZE, THUMBNAIL_SIZE, Qt.KeepAspectRatio
-        )
-        reader.setScaledSize(scaled_size)
-
-        # 4. 解码：JPEG 等格式会利用 DCT 缩放，内存占用远小于全量加载
-        image = reader.read()
-        if image.isNull():
-            logger.warning(f"⚠️  无法加载图片：{self.file_path}")
-            return False
-
-        scaled_pixmap = QPixmap.fromImage(image)
-        self.size = scaled_pixmap.size()
-
-        # 5. 设置为图标
-        self.setIcon(QIcon(scaled_pixmap))
-        # 6. 标记已加载
-        self.is_loaded = True
-        # 7. 设置项的 sizeHint → 缩略图实际尺寸 + 文字高度（20px）
-        hint_size = QSize(self.size.width(), self.size.height() + 20)
-        self.setSizeHint(hint_size)
-
-        logger.debug(f"加载缩略图：{self.file_path}, 原始: {original_size}, 缩略图: {self.size}")
-        return True
 
 
 class DirectoryPreviewWidget(QWidget):
     """目录预览组件 - 左侧栏"""
 
-    image_selected = Signal(str)
-
-    def __init__(self, main_window=None):
+    def __init__(self):
         super().__init__()
-        self.main_window = main_window
         self.current_dir = None
         self.image_files = []
         self.thumbnail_items = {}
@@ -88,7 +31,7 @@ class DirectoryPreviewWidget(QWidget):
         # ========== 缩略图加载定时器（滚动/初始渲染防抖） ==========
         self.visible_load_timer = QTimer(self)
         self.visible_load_timer.setSingleShot(True)
-        self.visible_load_timer.timeout.connect(self.load_visible_thumbnails)
+        self.visible_load_timer.timeout.connect(self._on_load_visible_thumbnails)
 
         # 1. 初始化界面
         self.init_ui()
@@ -109,14 +52,10 @@ class DirectoryPreviewWidget(QWidget):
         title_label.setAlignment(Qt.AlignCenter)  # 居中显示
         title_label.setMaximumHeight(25)  # 限制高度
 
-        # 4. 滚动区域（包裹缩略图列表）
-        self.scroll_area = QScrollArea()
-        self.scroll_area.setWidgetResizable(True)  # 内容可调整大小
-        self.scroll_area.setMinimumWidth(DIR_PREVIEW_WIDTH)  # 最小宽度
-        self.scroll_area.setVisible(False)  # 初始隐藏
-
-        # 5. 缩略图列表 widget
+        # 4. 缩略图列表 widget（QListWidget 自带滚动，无需外层 QScrollArea）
         self.list_widget = QListWidget()
+        self.list_widget.setMinimumWidth(DIR_PREVIEW_WIDTH)
+        self.list_widget.setVisible(False)  # 初始隐藏，加载目录后显示
         # ========== 设置尺寸策略（核心，解决宽度获取失败） ==========
         self.list_widget.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.list_widget.setMinimumSize(QSize(1, 1))  # 避免最小尺寸为0
@@ -141,18 +80,15 @@ class DirectoryPreviewWidget(QWidget):
         # 连接滚动事件，实现延迟加载
         self.list_widget.verticalScrollBar().valueChanged.connect(self.on_scroll)
 
-        # 6. 将 list_widget 放入 scroll_area 组合到一起
-        self.scroll_area.setWidget(self.list_widget)
-
-        # 7. 拖拽提示标签 （初始显示）
+        # 5. 拖拽提示标签 （初始显示）
         self.drop_label = QLabel("拖拽目录到此处")
         self.drop_label.setAlignment(Qt.AlignCenter)  # 居中显示
         self.drop_label.setStyleSheet("color: gray; font-size: 10px;")  # 提示文本样式
         self.drop_label.setMinimumHeight(80)  # 最小高度，确保显示完整
         
-        # 8. 添加组件到布局
+        # 6. 添加组件到布局
         layout.addWidget(title_label)  # 标题标签
-        layout.addWidget(self.scroll_area)  # 滚动区域
+        layout.addWidget(self.list_widget)  # 缩略图列表
         layout.addWidget(self.drop_label)  # 拖拽提示标签
 
     def dragEnterEvent(self, event):
@@ -179,18 +115,11 @@ class DirectoryPreviewWidget(QWidget):
                 event.acceptProposedAction()
 
     def load_directory(self, dir_path: str):
-        """加载目录"""
+        """加载目录，使用 scan_image_files 扫描图片文件"""
         self.current_dir = Path(dir_path)
-        self.image_files = []
+        self.image_files = scan_image_files(dir_path)
         self.thumbnail_items = {}
 
-        image_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.gif', '.tiff', '.webp'}
-
-        for file_path in self.current_dir.iterdir():
-            if file_path.is_file() and file_path.suffix.lower() in image_extensions:
-                self.image_files.append(file_path)
-
-        logger.debug(f"筛选到图片数量：{len(self.image_files)}")
         self.list_widget.setUpdatesEnabled(False)
         self.list_widget.clear()
 
@@ -203,9 +132,12 @@ class DirectoryPreviewWidget(QWidget):
 
         logger.debug(f"列表项总数：{self.list_widget.count()}")
         self.drop_label.setVisible(False)  # 拖拽提示标签隐藏
-        self.scroll_area.setVisible(True)  # 滚动区域显示
+        self.list_widget.setVisible(True)  # 缩略图列表显示
 
         logger.info(f"✅ 加载目录：{self.current_dir.name}，共 {len(self.image_files)} 张图片")
+
+        # 通过 EventBus 广播目录加载完成
+        event_bus.directory_loaded.emit(dir_path)
 
         # 延迟加载缩略图，先让Qt完成初始布局
         self.list_widget.scheduleDelayedItemsLayout()
@@ -213,93 +145,39 @@ class DirectoryPreviewWidget(QWidget):
 
     def schedule_visible_thumbnail_load(self, delay_ms: int = 0):
         """调度可见区域缩略图加载。"""
-        if self.list_widget.count() == 0 or not self.scroll_area.isVisible():
+        if self.list_widget.count() == 0 or not self.list_widget.isVisible():
             return
 
         self.visible_load_timer.start(max(delay_ms, 0))
 
-    def get_buffered_visible_rect(self):
-        """获取带缓冲区的可见区域，减少滚动时的空白闪烁。"""
-        viewport_rect = self.list_widget.viewport().rect()
-        buffer_size = max(THUMBNAIL_SIZE // 2, 40)
-        return viewport_rect.adjusted(-buffer_size, -buffer_size, buffer_size, buffer_size)
+    def _on_load_visible_thumbnails(self):
+        """缩略图加载定时器回调，委托给 thumbnail_loader 模块执行。"""
+        result = load_visible_thumbnails(self.list_widget)
 
-    def _estimate_visible_range(self):
-        """估算可见区域的 item 索引范围，避免遍历全部 item。"""
-        total = self.list_widget.count()
-        if total == 0:
-            return 0, 0
-
-        viewport = self.list_widget.viewport()
-        viewport_rect = viewport.rect()
-
-        # 用 indexAt 找到视口左上角对应的 item
-        from PySide6.QtCore import QPoint
-        first_idx = self.list_widget.indexAt(viewport_rect.topLeft())
-        if not first_idx.isValid():
-            first_idx = self.list_widget.indexAt(QPoint(5, 5))
-
-        start_row = first_idx.row() if first_idx.isValid() else 0
-
-        # 估算视口内能容纳多少 item（按缩略图尺寸 + 间距估算）
-        item_height = THUMBNAIL_SIZE + 25
-        viewport_width = max(viewport_rect.width(), 1)
-        items_per_row = max(viewport_width // (THUMBNAIL_SIZE + 10), 1)
-        visible_rows = (viewport_rect.height() // item_height) + 3  # +3 行缓冲
-        max_visible = items_per_row * visible_rows
-
-        # 前后各留一行缓冲
-        scan_start = max(start_row - items_per_row, 0)
-        scan_end = min(start_row + max_visible + items_per_row, total)
-        return scan_start, scan_end
-
-    def load_visible_thumbnails(self):
-        """加载可见区域的缩略图（仅扫描估算的可见范围，非全量遍历）"""
-        if self.list_widget.count() == 0 or not self.scroll_area.isVisible():
-            return
-
-        first_item = self.list_widget.item(0)
-        if first_item and self.list_widget.visualItemRect(first_item).isNull():
+        if result == -1:
+            # 布局未就绪，重新调度
             self.schedule_visible_thumbnail_load(30)
             return
 
-        visible_rect = self.get_buffered_visible_rect()
-        scan_start, scan_end = self._estimate_visible_range()
-        loaded_count = 0
-
-        for i in range(scan_start, scan_end):
-            item = self.list_widget.item(i)
-            if not item or not isinstance(item, ThumbnailItem) or item.is_loaded:
-                continue
-
-            item_rect = self.list_widget.visualItemRect(item)
-            if item_rect.isNull() or not visible_rect.intersects(item_rect):
-                continue
-
-            if item.load_thumbnail():
-                loaded_count += 1
-
-        if loaded_count == 0:
-            return
-
-        self.list_widget.scheduleDelayedItemsLayout()
-        self.list_widget.viewport().update()
-        logger.debug(f"已加载可见区域缩略图：{loaded_count} 张")
+        if result > 0:
+            # 有新加载的缩略图，触发布局刷新
+            self.list_widget.scheduleDelayedItemsLayout()
+            self.list_widget.viewport().update()
 
     def on_scroll(self):
         """滚动事件 - 延迟加载可见区域的缩略图"""
         self.schedule_visible_thumbnail_load(80)
 
     def on_item_clicked(self, item):
-        """图片项点击事件"""
+        """图片项点击事件，通过 EventBus 广播选中图片"""
         if item and isinstance(item, ThumbnailItem):
             file_path = item.file_path
             if file_path:
-                self.image_selected.emit(file_path)
+                event_bus.image_selected.emit(file_path)
 
     def _do_update_layout(self):
         """实际执行布局更新（节流后调用，核心方法）"""
-        if not self.scroll_area.isVisible() or self.list_widget.count() == 0:
+        if not self.list_widget.isVisible() or self.list_widget.count() == 0:
             return  # 无内容时直接返回，避免无效操作
         
         # 1. 保存当前滚动位置（关键：避免跳回顶部）
@@ -319,7 +197,7 @@ class DirectoryPreviewWidget(QWidget):
     def resizeEvent(self, event):
         """组件尺寸变化时，触发列表重新布局"""
         super().resizeEvent(event)
-        if self.scroll_area.isVisible():
+        if self.list_widget.isVisible():
             # 使用scheduleDelayedItemsLayout让Qt自动重新布局
             self.list_widget.scheduleDelayedItemsLayout()
             self.list_widget.viewport().update()

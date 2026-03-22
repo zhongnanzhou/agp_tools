@@ -4,7 +4,7 @@ AGP 主窗口模块
 
 from PySide6.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
                                QLabel, QFileDialog, QTabWidget, QStatusBar, QSplitter)
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt
 from PySide6.QtGui import QKeySequence
 from pathlib import Path
 from PIL import Image
@@ -23,6 +23,7 @@ from .config import (
     PREVIEW_MIN_HEIGHT,
     RESULT_MIN_HEIGHT,
 )
+from .event_bus import event_bus
 from .widgets import (
     DirectoryPreviewWidget,
     FunctionPanelWidget,
@@ -35,15 +36,23 @@ from .widgets import (
 class MainWindow(QMainWindow):
     """AGP 主窗口"""
 
-    panel_activated = Signal(object, str)
-    result_image_ready = Signal(object)
-
     def __init__(self):
         super().__init__()
         self.last_open_dir = ""
         self.init_ui()
+        self.connect_events()
 
         logger.info("AGP 主窗口 初始化完成")
+
+    def connect_events(self):
+        """连接 EventBus 事件"""
+        event_bus.image_selected.connect(self.on_directory_image_selected)
+        event_bus.image_changed.connect(self.on_preview_image_changed)
+        event_bus.function_triggered.connect(self.on_function_triggered)
+        event_bus.directory_loaded.connect(self.on_directory_loaded)
+        event_bus.status_updated.connect(self.update_status)
+        event_bus.result_ready.connect(self.on_result_ready)
+        event_bus.image_info_requested.connect(self.on_image_info_requested)
 
     def init_ui(self):
         """初始化界面"""
@@ -95,23 +104,21 @@ class MainWindow(QMainWindow):
         self.main_splitter.setStyleSheet("QSplitter::handle { background-color: #666; }")
         self.main_splitter.splitterMoved.connect(self.on_main_splitter_moved)
 
-        self.dir_preview_widget = DirectoryPreviewWidget(self)
+        self.dir_preview_widget = DirectoryPreviewWidget()
         self.dir_preview_widget.setMinimumWidth(DIR_PREVIEW_WIDTH)
         self.dir_preview_widget.setMaximumWidth(DIR_PREVIEW_WIDTH * 2)
-        self.dir_preview_widget.image_selected.connect(self.on_directory_image_selected)
 
         self.center_widget = QWidget()
         center_layout = QVBoxLayout(self.center_widget)
         center_layout.setContentsMargins(0, 0, 0, 0)
         center_layout.setSpacing(2)
 
-        self.preview_widget = ImagePreviewWidget(self)
-        self.preview_widget.image_changed.connect(self.on_preview_image_changed)
+        self.preview_widget = ImagePreviewWidget()
 
         self.result_tabs = QTabWidget()
 
         self.console_widget = ConsoleWidget()
-        self.result_display_widget = ResultDisplayWidget(self)
+        self.result_display_widget = ResultDisplayWidget()
 
         self.result_tabs.addTab(self.console_widget, "控制台")
         self.result_tabs.addTab(self.result_display_widget, "执行结果")
@@ -129,10 +136,9 @@ class MainWindow(QMainWindow):
 
         center_layout.addWidget(self.splitter)
 
-        self.function_panel_widget = FunctionPanelWidget(self)
+        self.function_panel_widget = FunctionPanelWidget()
         self.function_panel_widget.setMinimumWidth(FUNCTION_PANEL_WIDTH)
         self.function_panel_widget.setMaximumWidth(FUNCTION_PANEL_WIDTH * 2)
-        self.function_panel_widget.function_triggered.connect(self.on_function_triggered)
 
         self.main_splitter.addWidget(self.dir_preview_widget)
         self.main_splitter.addWidget(self.center_widget)
@@ -265,87 +271,108 @@ class MainWindow(QMainWindow):
 
     def on_preview_image_changed(self, file_path: str):
         """预览区域图片变化回调"""
-        pass
+        if file_path:
+            self.setWindowTitle(f"AGP - {Path(file_path).name}")
+        else:
+            self.setWindowTitle(f"AGP - Automated Graphic Processing Tools v{__version__}")
+
+    def on_directory_loaded(self, dir_path: str):
+        """目录加载完成回调"""
+        self.last_open_dir = dir_path
+        logger.info(f"目录已加载: {dir_path}")
+
+    def on_result_ready(self, pil_image):
+        """功能执行结果就绪回调"""
+        if pil_image:
+            self.result_display_widget.set_result_image(pil_image)
+            self.result_tabs.setCurrentIndex(1)
+
+    def on_image_info_requested(self, file_path: str):
+        """图片信息请求回调"""
+        from agp.utils.image_loader import ImageLoader
+        from agp.utils.file_helper import FileHelper
+        try:
+            info = ImageLoader.get_image_info(file_path)
+            logger.info("=" * 50)
+            logger.info("图片信息")
+            logger.info(f"  文件名: {info['name']}")
+            logger.info(f"  尺寸: {info['width']} x {info['height']}")
+            logger.info(f"  模式: {info['mode']}")
+            logger.info(f"  格式: {info['format']}")
+            logger.info(f"  大小: {FileHelper.format_size(info['size_bytes'])}")
+            logger.info(f"  透明通道: {'有' if info['has_alpha'] else '无'}")
+            logger.info("=" * 50)
+        except Exception as e:
+            logger.error(f"获取图片信息失败: {str(e)}")
+
+    # 功能ID -> (执行函数, 描述) 映射表
+    FUNCTION_MAP = {
+        "angle_detect": ("_exec_angle_detect", "角度检测"),
+        "angle_correct": ("_exec_angle_correct", "角度校正"),
+        "image_crop": ("_exec_image_crop", "图片切分"),
+        "image_compress": ("_exec_image_compress", "图片压缩"),
+    }
 
     def on_function_triggered(self, func_id: str):
-        """功能按钮被点击"""
+        """功能按钮被点击，通过映射表分发执行"""
         current_image = self.preview_widget.get_current_pil_image()
         if not current_image:
             logger.warning("请先加载图片")
             return
 
-        logger.info(f"执行功能: {func_id}")
+        entry = self.FUNCTION_MAP.get(func_id)
+        if not entry:
+            logger.warning(f"未知功能: {func_id}")
+            return
 
-        if func_id == "angle_detect":
-            self.execute_angle_detect(current_image)
-        elif func_id == "angle_correct":
-            self.execute_angle_correct(current_image)
-        elif func_id == "image_crop":
-            self.execute_image_crop(current_image)
-        elif func_id == "image_compress":
-            self.execute_image_compress(current_image)
-
-    def execute_angle_detect(self, pil_image: Image.Image):
-        """执行角度检测"""
+        method_name, desc = entry
+        logger.info(f"执行功能: {desc}")
         try:
-            from core.angle_detector import AngleDetector
-            detector = AngleDetector(pil_image)
-            angle = detector.detect_angle()
-            logger.info(f"检测到角度: {angle:.2f}°")
+            result = getattr(self, method_name)(current_image)
+            if result:
+                self._handle_function_result(result, desc)
         except Exception as e:
-            logger.error(f"角度检测失败: {str(e)}")
+            logger.error(f"{desc}失败: {str(e)}")
 
-    def execute_angle_correct(self, pil_image: Image.Image):
+    def _handle_function_result(self, pil_image, desc: str):
+        """统一处理功能执行结果，通过 EventBus 广播"""
+        self.preview_widget.set_image(pil_image)
+        self.preview_widget.mark_modified()
+        event_bus.result_ready.emit(pil_image)
+        logger.info(f"{desc}完成")
+
+    def _exec_angle_detect(self, pil_image: Image.Image):
+        """执行角度检测（仅输出结果，不产生新图片）"""
+        from agp.core.angle_detector import AngleDetector
+        detector = AngleDetector(pil_image)
+        angle = detector.detect_angle()
+        logger.info(f"检测到角度: {angle:.2f}°")
+        return None
+
+    def _exec_angle_correct(self, pil_image: Image.Image):
         """执行角度校正"""
-        try:
-            from core.isometric_corrector import IsometricCorrector
-            corrector = IsometricCorrector(pil_image)
-            corrected = corrector.correct()
-            if corrected:
-                self.result_display_widget.set_result_image(corrected)
-                self.preview_widget.set_image(corrected)
-                self.preview_widget.mark_modified()
-                self.result_tabs.setCurrentIndex(1)
-                logger.info("角度校正完成")
-        except Exception as e:
-            logger.error(f"角度校正失败: {str(e)}")
+        from agp.core.isometric_corrector import IsometricCorrector
+        corrector = IsometricCorrector(pil_image)
+        return corrector.correct()
 
-    def execute_image_crop(self, pil_image: Image.Image):
+    def _exec_image_crop(self, pil_image: Image.Image):
         """执行图片切分"""
-        try:
-            from core.image_cropper import ImageCropper
-            cropper = ImageCropper(pil_image)
-            cropped = cropper.crop(rows=2, cols=2)
-            if cropped:
-                self.result_display_widget.set_result_image(cropped)
-                self.preview_widget.set_image(cropped)
-                self.preview_widget.mark_modified()
-                self.result_tabs.setCurrentIndex(1)
-                logger.info("图片切分完成")
-        except Exception as e:
-            logger.error(f"图片切分失败: {str(e)}")
+        from agp.core.image_cropper import ImageCropper
+        current_file = self.preview_widget.get_current_file()
+        if current_file:
+            cropper = ImageCropper(current_file)
+            output_files = cropper.split_by_count(4, naming_style="index")
+            logger.info(f"图片切分已导出: {Path(output_files[0]).parent}，共 {len(output_files)} 张")
+            return cropper.crop(rows=2, cols=2)
+        cropper = ImageCropper(pil_image)
+        logger.info("当前为内存图片，仅执行切分预览，未导出切片文件")
+        return cropper.crop(rows=2, cols=2)
 
-    def execute_image_compress(self, pil_image: Image.Image):
+    def _exec_image_compress(self, pil_image: Image.Image):
         """执行图片压缩"""
-        try:
-            from core.image_compressor import ImageCompressor
-            compressor = ImageCompressor(pil_image)
-            compressed = compressor.compress(quality=85)
-            if compressed:
-                self.result_display_widget.set_result_image(compressed)
-                self.preview_widget.set_image(compressed)
-                self.preview_widget.mark_modified()
-                self.result_tabs.setCurrentIndex(1)
-                logger.info("图片压缩完成")
-        except Exception as e:
-            logger.error(f"图片压缩失败: {str(e)}")
-
-    def notify_panel(self):
-        """通知当前面板图片已更新 - 使用观察者模式"""
-        if self.current_panel:
-            current_file = self.preview_widget.get_current_file()
-            if current_file:
-                self.panel_activated.emit(self.current_panel, current_file)
+        from agp.core.image_compressor import ImageCompressor
+        compressor = ImageCompressor(pil_image)
+        return compressor.compress(quality=85)
 
     def get_console(self):
         """获取控制台组件"""

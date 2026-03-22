@@ -4,25 +4,32 @@
 
 from PIL import Image
 from pathlib import Path
+from io import BytesIO
+from typing import Union
 
 
 class ImageCompressor:
     """图片压缩工具类"""
     
-    def __init__(self, input_path: str):
+    def __init__(self, input_source: Union[str, Path, Image.Image]):
         """
         初始化压缩工具
         
         Args:
-            input_path: 输入图片路径
+            input_source: 输入图片路径或 PIL Image 对象
         """
-        self.input_path = Path(input_path)
-        
-        if not self.input_path.exists():
-            raise FileNotFoundError(f"文件不存在：{input_path}")
-        
-        self.image = Image.open(input_path)
-        self.original_size = self.input_path.stat().st_size
+        self.input_path = None
+        if isinstance(input_source, Image.Image):
+            self.image = input_source.copy()
+            buffer = BytesIO()
+            self.image.save(buffer, format='PNG')
+            self.original_size = buffer.tell()
+        else:
+            self.input_path = Path(input_source)
+            if not self.input_path.exists():
+                raise FileNotFoundError(f"文件不存在：{input_source}")
+            self.image = Image.open(self.input_path)
+            self.original_size = self.input_path.stat().st_size
     
     def compress_png(self, output_path: str = None, compress_level: int = 9):
         """
@@ -36,6 +43,8 @@ class ImageCompressor:
             压缩后的文件大小
         """
         if output_path is None:
+            if not self.input_path:
+                raise ValueError("内存图片压缩需要提供输出路径")
             output_path = self.input_path.parent / f"{self.input_path.stem}_compressed.png"
         else:
             output_path = Path(output_path)
@@ -52,6 +61,14 @@ class ImageCompressor:
         
         compressed_size = output_path.stat().st_size
         return compressed_size
+
+    def compress(self, quality: int = 85):
+        colors = max(16, min(256, int(quality / 100 * 256)))
+        if self.image.mode in ['RGBA', 'LA', 'PA']:
+            palette_image = self.image.convert('RGBA').convert('P', palette=Image.ADAPTIVE, colors=colors)
+            return palette_image.convert('RGBA')
+        palette_image = self.image.convert('RGB').convert('P', palette=Image.ADAPTIVE, colors=colors)
+        return palette_image.convert('RGB')
     
     def get_compression_info(self):
         """

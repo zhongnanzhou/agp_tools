@@ -6,9 +6,6 @@ import logging
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel, 
                                QPushButton, QFileDialog, QGroupBox, QComboBox)
 from pathlib import Path
-import sys
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ..core.image_compressor import ImageCompressor
 

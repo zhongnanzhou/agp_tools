@@ -7,12 +7,9 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QLabel,
                                QPushButton, QGroupBox, QRadioButton)
 from PySide6.QtCore import Qt
 from pathlib import Path
-import sys
 import cv2
 import numpy as np
 from PIL import Image
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from ..core.angle_detector import AngleDetector
 

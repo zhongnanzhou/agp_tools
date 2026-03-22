@@ -6,7 +6,10 @@ AGP - Automated Graphic Processing Tools
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).parent.parent))
+if __package__ in (None, ""):
+    project_root = Path(__file__).resolve().parent.parent
+    if str(project_root) not in sys.path:
+        sys.path.insert(0, str(project_root))
 
 from PySide6.QtWidgets import QApplication
 from agp.ui.main_window import MainWindow

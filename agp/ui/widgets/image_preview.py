@@ -3,10 +3,12 @@
 """
 
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QScrollArea, QMessageBox, QButtonGroup, QRadioButton
-from PySide6.QtCore import Qt, Signal, QPoint, QRect
+from PySide6.QtCore import Qt, QPoint, QRect
 from PySide6.QtGui import QPixmap, QImage, QDragEnterEvent, QDropEvent, QPainter, QPen, QColor, QCursor
 import numpy as np
 from PIL import Image
+
+from ..event_bus import event_bus
 
 import logging
 logger = logging.getLogger(__name__)
@@ -118,11 +120,7 @@ class EditableImageLabel(QLabel):
 class ImagePreviewWidget(QWidget):
     """图片预览组件"""
 
-    image_changed = Signal(str)
-    pil_image_changed = Signal(object)
-    request_switch_image = Signal(str)
-
-    def __init__(self, main_window=None):
+    def __init__(self):
         super().__init__()
         self.current_file = None
         self.original_file = None
@@ -130,7 +128,6 @@ class ImagePreviewWidget(QWidget):
         self.current_pil_image = None
         self.original_pil_image = None
         self.is_modified = False
-        self.main_window = main_window
         self.init_ui()
 
     def init_ui(self):
@@ -234,29 +231,11 @@ class ImagePreviewWidget(QWidget):
 
         self.remove_btn.setEnabled(True)
 
-        self.image_changed.emit(file_path)
-        self.pil_image_changed.emit(self.current_pil_image)
+        event_bus.image_changed.emit(file_path)
+        event_bus.pil_image_changed.emit(self.current_pil_image)
 
-        self.log_image_info(file_path)
-
-    def log_image_info(self, file_path: str):
-        """记录图片信息到控制台"""
-        from utils.image_loader import ImageLoader
-        from utils.file_helper import FileHelper
-
-        try:
-            info = ImageLoader.get_image_info(file_path)
-            logger.info("=" * 50)
-            logger.info("图片信息")
-            logger.info(f"  文件名: {info['name']}")
-            logger.info(f"  尺寸: {info['width']} x {info['height']}")
-            logger.info(f"  模式: {info['mode']}")
-            logger.info(f"  格式: {info['format']}")
-            logger.info(f"  大小: {FileHelper.format_size(info['size_bytes'])}")
-            logger.info(f"  透明通道: {'有' if info['has_alpha'] else '无'}")
-            logger.info("=" * 50)
-        except Exception as e:
-            logger.error(f"无法读取图片信息: {str(e)}")
+        # 通过 EventBus 请求记录图片信息，不再直接依赖 utils
+        event_bus.image_info_requested.emit(file_path)
 
     def set_image(self, pil_image: Image.Image, title: str = "处理结果"):
         """设置内存中的PIL图片到预览区域"""
@@ -281,7 +260,7 @@ class ImagePreviewWidget(QWidget):
 
         self.remove_btn.setEnabled(True)
 
-        self.pil_image_changed.emit(pil_image)
+        event_bus.pil_image_changed.emit(pil_image)
 
     def mark_modified(self):
         """标记图片已修改"""
@@ -375,8 +354,8 @@ class ImagePreviewWidget(QWidget):
         self.image_label.resize(400, 400)
         self.image_label.clear_drawings()
         self.remove_btn.setEnabled(False)
-        self.image_changed.emit("")
-        self.pil_image_changed.emit(None)
+        event_bus.image_changed.emit("")
+        event_bus.pil_image_changed.emit(None)
 
     def get_current_file(self):
         """获取当前文件路径"""

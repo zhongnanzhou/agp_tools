@@ -145,3 +145,12 @@ plan/
 .cursorignore
 .cursorindexingignore
 cursor_rules.txt
+.vscode*/
+.codebuddy/
+tests/
+pytest.ini
+open_vscode.sh
+open_vscode.bat
+.trae/
+.benchmarks/
+.ai_coding/

@@ -12,9 +12,8 @@ from PIL import Image
 class ResultDisplayWidget(QWidget):
     """结果展示组件 - 显示执行结果图片"""
 
-    def __init__(self, main_window=None):
+    def __init__(self):
         super().__init__()
-        self.main_window = main_window
         self.init_ui()
 
     def init_ui(self):
