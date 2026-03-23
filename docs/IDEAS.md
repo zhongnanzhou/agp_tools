@@ -36,3 +36,6 @@
 
 - [2026-03-23] **反面教训** Task工具调度Engineer Agent返回空结果（0 tool uses），降级策略有效兜底
   - 场景：L2测试P3任务时，Task工具返回空finalResult，触发leader-orchestration的"降级策略：高阶工具失败时回退到基础工具"，Leader直接用replace_in_file完成代码修改。进化建议：在调度执行中增加Task工具返回空时的异常处理分支
+
+- [2026-03-23] **方向性建议** FUTURE是动态迭代文档而非持续追加的坟墓，已完成目标移出到MILESTONES，技术债务统一管理
+  - 场景：Review遗留的技术债务无处记录，增加TECH_DEBT.md会增维护成本。解决方案：FUTURE增加技术债务章节，新增document-manager"维护FUTURE"能力，验收收口增加技术债务记录步骤
