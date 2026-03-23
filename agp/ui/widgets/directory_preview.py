@@ -7,7 +7,7 @@ from pathlib import Path
 from ..config import DIR_PREVIEW_WIDTH, THUMBNAIL_SIZE
 from ..event_bus import event_bus
 from .thumbnail_item import ThumbnailItem
-from .thumbnail_loader import scan_image_files, load_visible_thumbnails
+from .thumbnail_loader import scan_image_files, load_visible_thumbnails, IMAGE_EXTENSIONS
 
 import logging
 logger = logging.getLogger(__name__)
@@ -81,7 +81,7 @@ class DirectoryPreviewWidget(QWidget):
         self.list_widget.verticalScrollBar().valueChanged.connect(self.on_scroll)
 
         # 5. 拖拽提示标签 （初始显示）
-        self.drop_label = QLabel("拖拽目录到此处")
+        self.drop_label = QLabel("拖拽目录或图片到此处")
         self.drop_label.setAlignment(Qt.AlignCenter)  # 居中显示
         self.drop_label.setStyleSheet("color: gray; font-size: 10px;")  # 提示文本样式
         self.drop_label.setMinimumHeight(80)  # 最小高度，确保显示完整
@@ -106,13 +106,44 @@ class DirectoryPreviewWidget(QWidget):
         pass
 
     def dropEvent(self, event):
-        """拖拽放下事件"""
-        files = event.mimeData().urls()
-        if files:
-            dir_path = files[0].toLocalFile()
-            if dir_path and Path(dir_path).is_dir():
-                self.load_directory(dir_path)
-                event.acceptProposedAction()
+        """拖拽放下事件 - 支持目录和单张/多张图片文件"""
+        urls = event.mimeData().urls()
+        if not urls:
+            return
+        
+        # 取第一个判断是目录还是文件
+        first_path = Path(urls[0].toLocalFile())
+        
+        # 情况1：拖入目录 - 加载整个目录（忽略其他项）
+        if first_path.is_dir():
+            self.load_directory(str(first_path))
+            event.acceptProposedAction()
+            return
+        
+        # 情况2：拖入图片文件 - 批量追加到列表（临时模式）
+        added_count = 0
+        for url in urls:
+            file_path = url.toLocalFile()
+            if not file_path:
+                continue
+            
+            path = Path(file_path)
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                item = ThumbnailItem(str(path))
+                self.list_widget.addItem(item)
+                self.thumbnail_items[str(path)] = item
+                added_count += 1
+        
+        if added_count > 0:
+            # 确保列表可见
+            self.drop_label.setVisible(False)
+            self.list_widget.setVisible(True)
+            
+            # 触发缩略图加载
+            self.schedule_visible_thumbnail_load(50)
+            
+            logger.info(f"✅ 拖入图片：{added_count} 张")
+            event.acceptProposedAction()
 
     def load_directory(self, dir_path: str):
         """加载目录，使用 scan_image_files 扫描图片文件"""
